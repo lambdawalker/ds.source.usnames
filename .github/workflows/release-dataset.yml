@@ -22,6 +22,14 @@ jobs:
           python -m pip install -r requirements-lock.txt
           python -m pip install --no-deps -e .
           python -m unittest discover -s tests -v
+      - name: Prepare draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view dataset-v0.2.0 >/dev/null 2>&1; then
+            gh release create dataset-v0.2.0 --draft --target "$GITHUB_SHA" --title 'US names dataset v0.2.0' --notes-file scripts/release-notes.md
+          fi
       - name: Download pinned originals and build
         run: |
           mkdir -p data/raw dist
@@ -37,5 +45,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create dataset-v0.2.0 dist/* --draft --target "$GITHUB_SHA" --title 'US names dataset v0.2.0' --notes-file scripts/release-notes.md
+          gh release upload dataset-v0.2.0 dist/*
           gh release edit dataset-v0.2.0 --draft=false

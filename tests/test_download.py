@@ -1,6 +1,7 @@
 import hashlib
 import tempfile
 import unittest
+import urllib.request
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +22,20 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(download_sources(dest,sources=sources),manifest)
             (dest/'original.zip').write_bytes(b'corrupt')
             with self.assertRaises(ValueError): source_manifest(dest,sources=sources)
+
+    def test_download_passes_browser_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original = root / 'original.zip'
+            with zipfile.ZipFile(original, 'w') as z:
+                z.writestr('sample.txt', 'data')
+            dest = root / 'raw'
+            with patch('urllib.request.urlopen', wraps=urllib.request.urlopen) as mock_urlopen:
+                download_sources(dest, sources={'test': original.as_uri()})
+                self.assertTrue(mock_urlopen.called)
+                req = mock_urlopen.call_args[0][0]
+                self.assertIsInstance(req, urllib.request.Request)
+                self.assertIsNotNone(req.get_header('User-agent'))
 
     def test_failed_download_does_not_leave_final_file(self):
         with tempfile.TemporaryDirectory() as tmp:

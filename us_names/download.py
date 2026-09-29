@@ -15,6 +15,16 @@ SOURCES = {
     'ssa_national': 'https://www.ssa.gov/oact/babynames/names.zip',
 }
 MANIFEST = 'sources.manifest.json'
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+}
 
 
 def _describe(path, url):
@@ -58,7 +68,8 @@ def download_sources(raw_dir='data/raw', refresh=False, sources=None):
             temp = path.with_suffix(path.suffix + '.part')
             try:
                 print(f'Downloading {key}: {url}', flush=True)
-                with urllib.request.urlopen(url, timeout=60) as response, temp.open('wb') as stream:
+                request = urllib.request.Request(url, headers=HEADERS)
+                with urllib.request.urlopen(request, timeout=60) as response, temp.open('wb') as stream:
                     while block := response.read(1024 * 1024):
                         stream.write(block)
                 record = _describe(temp, url)

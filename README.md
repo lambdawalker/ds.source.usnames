@@ -9,10 +9,10 @@ Python name generator for synthetic ID-card tests, backed by government aggregat
 Python 3.10+. Run from this directory:
 
 ```sh
-python -m pip install -e .
-python -m us_names.download
-python -m us_names.build
-python -m us_names generate --format full --count 20 --seed 42
+uv run python -m pip install -e .
+uv run python -m us_names.download
+uv run python -m us_names.build
+uv run python -m us_names generate --format full --count 20 --seed 42
 ```
 
 The downloader retrieves three Census workbooks (given-name groups, surname groups, given-name sex) and the SSA national ZIP. It records SHA-256 hashes in `data/raw/sources.manifest.json`. Repeating it verifies and reuses cached files. `--refresh` fetches current source releases. Use a different `--raw-dir` to preserve an older snapshot.

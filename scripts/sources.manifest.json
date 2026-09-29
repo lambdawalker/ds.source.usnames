@@ -1,0 +1,26 @@
+{
+  "census_sex": {
+    "url": "https://www2.census.gov/topics/genealogy/2020surnames/Names2020_FirstNames_Sex.xlsx",
+    "file": "Names2020_FirstNames_Sex.xlsx",
+    "sha256": "b763374b9b0ea4a9496f8563721312e8572e5a45136d34244db9ffba666c3326",
+    "bytes": 3018453
+  },
+  "census_given": {
+    "url": "https://www2.census.gov/topics/genealogy/2020surnames/Names2020_FirstNames_RaceHispanic.xlsx",
+    "file": "Names2020_FirstNames_RaceHispanic.xlsx",
+    "sha256": "881e092953c2eac345c4d4adea8df14fab2c892c1046231e2d9be3cd23850033",
+    "bytes": 4096264
+  },
+  "census_surname": {
+    "url": "https://www2.census.gov/topics/genealogy/2020surnames/Names2020_LastNames_RaceHispanic.xlsx",
+    "file": "Names2020_LastNames_RaceHispanic.xlsx",
+    "sha256": "2e773c7edd934bb340b09be46e5d991b74a65cd63f547c94f80b6e233db462b3",
+    "bytes": 11359767
+  },
+  "ssa_national": {
+    "url": "https://www.ssa.gov/oact/babynames/names.zip",
+    "file": "names.zip",
+    "sha256": "cd78e975ed7bb358e018dd62fbe14ced89295e9581c49172ca4eedcb011b3724",
+    "bytes": 7860026
+  }
+}

@@ -9,6 +9,7 @@ from pathlib import Path
 
 BASE = 'https://www2.census.gov/topics/genealogy/2020surnames/'
 SOURCES = {
+    'census_sex': BASE + 'Names2020_FirstNames_Sex.xlsx',
     'census_given': BASE + 'Names2020_FirstNames_RaceHispanic.xlsx',
     'census_surname': BASE + 'Names2020_LastNames_RaceHispanic.xlsx',
     'ssa_national': 'https://www.ssa.gov/oact/babynames/names.zip',

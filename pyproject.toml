@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "us-synthetic-names"
-version = "0.1.0"
+version = "0.2.0"
 description = "Source-tracked US synthetic names with frequency, cohort and length controls"
 requires-python = ">=3.10"
 dependencies = ["openpyxl>=3.1,<4", "regex>=2024.0"]

@@ -1,0 +1,41 @@
+name: Release names dataset
+on:
+  push:
+    branches: [release/dataset-v0.2.0]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release-dataset-v0.2.0
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and test
+        run: |
+          python -m pip install -r requirements-lock.txt
+          python -m pip install --no-deps -e .
+          python -m unittest discover -s tests -v
+      - name: Download pinned originals and build
+        run: |
+          mkdir -p data/raw dist
+          cp scripts/sources.manifest.json data/raw/sources.manifest.json
+          python -m us_names.download
+          python -m us_names.build
+          python -m us_names export --output dist/tokens.jsonl.gz
+          python scripts/package_release.py
+          cd dist
+          sha256sum --check SHA256SUMS
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create dataset-v0.2.0 dist/* --draft --target "$GITHUB_SHA" --title 'US names dataset v0.2.0' --notes-file scripts/release-notes.md
+          gh release edit dataset-v0.2.0 --draft=false

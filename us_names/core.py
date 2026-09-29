@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 import regex
 
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 GROUPS = ('white', 'black', 'aian', 'asian_nhpi', 'multiracial', 'hispanic')
 FORMATS = {
     'given': '{given}', 'surname': '{surname}', 'name': '{given} {surname}',
@@ -22,6 +22,8 @@ FORMATS = {
     'initials': '{given_initial} {middle_initial} {surname_initial}',
     'surname_first': '{surname}, {given} {middle_initial}',
 }
+# Curated ordered exceptions; explicitly requested only, with no invented frequency.
+COMPOUND_EXCEPTIONS = {('JOSE','MARIA'):'M', ('MARIA','JOSE'):'F'}
 COMPONENTS = ('given', 'middle', 'surname', 'surname2')
 
 
@@ -51,6 +53,9 @@ class Query:
     max_length: int | None = None
     component_lengths: dict[str, tuple[int, int | None]] = field(default_factory=dict)
     use_frequency_weights: bool = True
+    given_pair: tuple[str, str] | None = None
+    gender: str = 'auto'
+    min_gender_share: float = 0.05
     group: str | None = 'auto'
     min_group_share: float = 0.05
     birth_year_range: tuple[int, int] | None = None
@@ -60,187 +65,137 @@ class Query:
     max_attempts: int = 10000
 
 
-class Dataset:
-    """SQLite dataset; use as a context manager to close it."""
-    def __init__(self, path):
-        path = Path(path)
-        if not path.is_file():
-            raise FileNotFoundError(f'{path}: build the dataset first')
-        self.path = path
-        self.connection = sqlite3.connect(path)
-        self.connection.row_factory = sqlite3.Row
-
-    @classmethod
-    def create(cls, path):
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            raise FileExistsError(path)
-        c = sqlite3.connect(path)
-        c.executescript('''
-            CREATE TABLE names (name TEXT NOT NULL, role TEXT NOT NULL, total REAL NOT NULL,
-              groups_json TEXT NOT NULL, source TEXT NOT NULL,
-              origins_json TEXT NOT NULL DEFAULT '[]', PRIMARY KEY(name, role));
-            CREATE TABLE annual (name TEXT NOT NULL, year INTEGER NOT NULL, count INTEGER NOT NULL,
-              PRIMARY KEY(name, year)) WITHOUT ROWID;
-            CREATE INDEX annual_year ON annual(year);
-            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        ''')
-        c.close()
-        return cls(path)
-
-    def add_name(self, name, role, total, groups, source, origins=None):
-        if role not in ('given','surname') or not name or total < 0 or any(v < 0 for v in groups.values()):
-            raise ValueError('Invalid name record or negative counts')
-        self.connection.execute('INSERT INTO names VALUES (?,?,?,?,?,?)',
-            (unicodedata.normalize('NFC', name), role, total, json.dumps(groups), source, json.dumps(origins or [])))
-
-    def add_annual(self, name, year, count):
-        if count < 0:
-            raise ValueError('Negative annual count')
-        self.connection.execute('INSERT INTO annual VALUES (?,?,?) ON CONFLICT(name,year) DO UPDATE SET count=count+excluded.count', (name, year, count))
-
-    def set_metadata(self, key, value):
-        self.connection.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(key,json.dumps(value)))
-
-    def metadata(self):
-        return {r['key']: json.loads(r['value']) for r in self.connection.execute('SELECT * FROM metadata')}
-
-    def commit(self):
-        self.connection.commit()
-
-    def close(self):
-        self.connection.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        self.close()
+from .database import Dataset
 
 
 class Generator:
-    """Single-threaded, seeded generator; instantiate after dataset edits.
+    """SQL-filtered candidate pools; one generator per worker, bounded instance caches."""
+    def __init__(self,dataset,seed=None):
+        self.dataset,self.seed=dataset,seed
+        self.random=random.Random(seed)
+        self.dataset_version=dataset.metadata().get('dataset_version','unversioned')
+        self._pools={}
+        self._records={}
+        self._cohort_years=None
 
-    Create one instance per worker. Sampling pools are cached for batches.
-    """
-    def __init__(self, dataset, seed=None):
-        self.dataset, self.seed = dataset, seed
-        self.random = random.Random(seed)
-        self.rows = {'given': [], 'surname': []}
-        for r in dataset.connection.execute('SELECT * FROM names ORDER BY role,name'):
-            record = dict(r)
-            record['groups'] = json.loads(record.pop('groups_json'))
-            record['origins'] = json.loads(record.pop('origins_json'))
-            self.rows[record['role']].append(record)
-        self.dataset_version = dataset.metadata().get('dataset_version', 'unversioned')
+    def _cohort(self,years):
+        if getattr(self.dataset,'_cohort_years',None)==years:return
+        c=self.dataset.connection
+        c.execute('DROP TABLE IF EXISTS temp.cohort_counts')
+        c.execute('CREATE TEMP TABLE cohort_counts(name_id INTEGER, sex TEXT, count REAL, share REAL, PRIMARY KEY(name_id,sex)) WITHOUT ROWID')
+        c.execute('INSERT INTO cohort_counts SELECT name_id,sex,SUM(count),0 FROM name_year_sex_counts WHERE year BETWEEN ? AND ? GROUP BY name_id,sex',years)
+        c.execute('UPDATE cohort_counts AS s SET share=count/(SELECT SUM(t.count) FROM cohort_counts t WHERE t.name_id=s.name_id)')
+        self.dataset._cohort_years=years
 
-    @lru_cache(maxsize=16)
-    def _annual(self, years):
-        return dict(self.dataset.connection.execute('SELECT name,SUM(count) FROM annual WHERE year BETWEEN ? AND ? GROUP BY name', years))
-
-    @lru_cache(maxsize=128)
-    def _pool(self, role, group, share, years, weighted, lower, upper, casing, ascii_only):
-        annual = self._annual(years) if years and role == 'given' else None
-        q = Query(casing=casing, ascii_only=ascii_only)
-        entries, cumulative, mass = [], [], 0.0
-        for row in self.rows[role]:
-            total = row['total']
-            gc = row['groups'].get(group, 0) if group else total
-            if group and (not total or gc <= 0 or gc / total < share):
-                continue
-            if annual is not None and row['name'] not in annual:
-                continue
-            rendered = transform(row['name'], q)
-            size = char_length(rendered)
-            if not rendered or size < lower or (upper is not None and size > upper):
-                continue
-            # Product approximation: cohort frequency × Census group share.
-            w = annual[row['name']] * (gc / total if group else 1) if annual is not None else gc
-            if weighted and w <= 0:
-                continue
-            mass += w if weighted else 1
-            entries.append((row, rendered))
-            cumulative.append(mass)
-        return entries, cumulative
-
-    def _prepare(self, q):
-        if q.min_length < 0 or (q.max_length is not None and q.max_length < q.min_length):
-            raise ValueError('Invalid inclusive length range')
-        if q.max_attempts < 1 or not 0 <= q.min_group_share <= 1:
-            raise ValueError('Invalid attempt limit or group share')
-        if q.casing not in ('source','upper','lower','title'):
-            raise ValueError('Unknown casing')
-        if q.group not in (None,'auto',*GROUPS):
-            raise ValueError(f'Unknown group: {q.group}')
-        if q.birth_year_range and (len(q.birth_year_range) != 2 or q.birth_year_range[0] > q.birth_year_range[1]):
-            raise ValueError('Invalid birth year range')
-        template = FORMATS.get(q.format, q.format)
-        fields = []
-        for literal, name, spec, conversion in string.Formatter().parse(template):
-            if name is None:
-                continue
-            if name.removesuffix('_initial') not in COMPONENTS or spec or conversion:
-                raise ValueError(f'Unsupported template field: {name}')
-            fields.append(name)
-        if not fields:
-            raise ValueError('Format must contain a name placeholder or be a preset')
-        components = tuple(c for c in COMPONENTS if c in fields or c+'_initial' in fields)
-        for key, bounds in q.component_lengths.items():
-            if key not in components or len(bounds) != 2 or bounds[0] < 0 or (bounds[1] is not None and bounds[1] < bounds[0]):
-                raise ValueError(f'Invalid component length: {key}')
-        years = tuple(q.birth_year_range) if q.birth_year_range else None
-        options = []
-        for group in (GROUPS if q.group == 'auto' else [q.group]):
-            pools = {}
-            for c in components:
-                low, high = q.component_lengths.get(c, (1,None))
-                pool = self._pool('given' if c in ('given','middle') else 'surname',group,q.min_group_share,years,q.use_frequency_weights,low,high,q.casing,q.ascii_only)
-                if not pool[0]:
-                    break
-                pools[c] = pool
+    def _pool(self,role,group,gender,q,bounds):
+        years=tuple(q.birth_year_range) if q.birth_year_range and role=='given' else None
+        gender=gender if role=='given' else None
+        key=(role,group,gender,years,q.use_frequency_weights,q.min_group_share,q.min_gender_share,*bounds,q.casing,q.ascii_only)
+        if key in self._pools:return self._pools[key]
+        if years:self._cohort(years)
+        joins=[];where=['n.role=:role'];params={'role':role,'group':group,'sex':gender,'gs':q.min_group_share,'ss':q.min_gender_share}
+        weight='n.total';sexshare='NULL';cohort='NULL'
+        if group:
+            joins.append('JOIN name_group_counts g ON g.name_id=n.id AND g.group_id=:group')
+            where.extend(['n.total>0','g.count>0','g.count>=:gs*n.total'])
+            weight='g.count'
+        if years:
+            if gender:
+                joins.append('JOIN cohort_counts s ON s.name_id=n.id AND s.sex=:sex')
+                where.extend(['s.count>0','s.share>=:ss'])
+                sexshare='s.share';cohort='s.count'
             else:
-                options.append((group, pools, pools[components[0]][1][-1]))
-        if not options:
-            raise NoCandidates('No eligible tokens for all components; relax group, cohort or component limits')
-        return template, components, options
+                joins.append('JOIN (SELECT name_id,SUM(count) AS count FROM cohort_counts GROUP BY name_id) s ON s.name_id=n.id')
+                where.append('s.count>0');cohort='s.count'
+            weight='s.count*(g.count/n.total)' if group else 's.count'
+        elif gender:
+            joins.append('JOIN name_sex_counts s ON s.name_id=n.id AND s.sex=:sex')
+            where.extend(['s.count>0','s.share>=:ss'])
+            sexshare='s.share'
+            weight=f'({weight})*s.share'
+        low,high=bounds
+        # Stored length uses indexed source grapheme count. Transform-dependent lengths are filtered below.
+        if q.casing=='source' and not q.ascii_only:
+            where.append('n.char_length>=:low');params['low']=low
+            if high is not None:where.append('n.char_length<=:high');params['high']=high
+        if q.use_frequency_weights:where.append(f'({weight})>0')
+        sql=f"SELECT n.id,n.name,({weight}) AS weight,({sexshare}) AS gender_share,({cohort}) AS cohort_count FROM names n {' '.join(joins)} WHERE {' AND '.join(where)} ORDER BY n.name"
+        entries=[];cumulative=[];mass=0.0
+        for row in self.dataset.connection.execute(sql,params):
+            rendered=transform(row['name'],q)
+            length=char_length(rendered)
+            if not rendered or length<low or (high is not None and length>high):continue
+            mass+=row['weight'] if q.use_frequency_weights else 1
+            entries.append((dict(row),rendered));cumulative.append(mass)
+        if len(self._pools)>=48:self._pools.clear()
+        result=(entries,cumulative);self._pools[key]=result
+        return result
 
-    def generate(self, query=None):
-        q = query or Query()
-        key = json.dumps(q.__dict__,sort_keys=True)
-        if not hasattr(self,'_prepared') or self._prepared[0] != key:
-            self._prepared = key, self._prepare(q)
-        template, components, options = self._prepared[1]
+    def _prepare(self,q):
+        if q.min_length<0 or (q.max_length is not None and q.max_length<q.min_length):raise ValueError('Invalid inclusive length range')
+        if q.gender not in ('auto','female','male','unrestricted'):raise ValueError('Unknown gender')
+        if q.max_attempts<1 or not 0<=q.min_group_share<=1 or not 0<=q.min_gender_share<=1:raise ValueError('Invalid attempt limit or share threshold')
+        if q.casing not in ('source','upper','lower','title'):raise ValueError('Unknown casing')
+        if q.group not in (None,'auto',*GROUPS):raise ValueError('Unknown group')
+        if q.birth_year_range and (len(q.birth_year_range)!=2 or q.birth_year_range[0]>q.birth_year_range[1]):raise ValueError('Invalid birth year range')
+        template=FORMATS.get(q.format,q.format);fields=[]
+        for literal,name,spec,conversion in string.Formatter().parse(template):
+            if name is None:continue
+            if name.removesuffix('_initial') not in COMPONENTS or spec or conversion:raise ValueError(f'Unsupported field: {name}')
+            fields.append(name)
+        if not fields:raise ValueError('Format must contain a name placeholder')
+        components=tuple(c for c in COMPONENTS if c in fields or c+'_initial' in fields)
+        for key,bounds in q.component_lengths.items():
+            if key not in components or len(bounds)!=2 or bounds[0]<0 or (bounds[1] is not None and bounds[1]<bounds[0]):raise ValueError('Invalid component bounds')
+        pair=tuple(x.upper() for x in q.given_pair) if q.given_pair else None
+        if pair and (len(pair)!=2 or not {'given','middle'}.issubset(components)):raise ValueError('given_pair requires two strings and both given and middle slots')
+        exception=COMPOUND_EXCEPTIONS.get(pair)
+        has_given=any(c in components for c in ('given','middle'))
+        genders=['M','F'] if q.gender=='auto' and has_given else [{'male':'M','female':'F'}.get(q.gender) if has_given else None]
+        if exception:
+            if q.gender in ('male','female') and {'male':'M','female':'F'}[q.gender]!=exception:raise NoCandidates('Requested gender conflicts with compound exception')
+            genders=[exception]
+        options=[]
+        for group in (GROUPS if q.group=='auto' else [q.group]):
+            for gender in genders:
+                pools={}
+                for component in components:
+                    role='given' if component in ('given','middle') else 'surname'
+                    pool=self._pool(role,group,None if exception and role=='given' else gender,q,q.component_lengths.get(component,(1,None)))
+                    if pair and role=='given':
+                        matching=[r for r in pool[0] if r[0]['name']==pair[0 if component=='given' else 1]]
+                        pool=(matching,[1.0]*len(matching))
+                    if not pool[0]:break
+                    pools[component]=pool
+                else:options.append((group,gender,pools,pools[components[0]][1][-1]))
+        if not options:raise NoCandidates('No eligible tokens; relax group, gender, cohort or component limits')
+        return template,components,options
+
+    def generate(self,query=None):
+        q=query or Query();key=json.dumps(q.__dict__,sort_keys=True)
+        if not hasattr(self,'_prepared') or self._prepared[0]!=key:self._prepared=key,self._prepare(q)
+        template,components,options=self._prepared[1]
         for _ in range(q.max_attempts):
-            group, pools, _ = self.random.choices(options, weights=[x[2] for x in options], k=1)[0]
-            values, selected = {}, {}
-            for c in components:
-                rows, cumulative = pools[c]
-                index = bisect.bisect_right(cumulative, self.random.random()*cumulative[-1])
-                record, rendered = rows[index]
-                selected[c] = record, rendered
-                values[c] = rendered
-                values[c+'_initial'] = regex.findall(r'\X',rendered)[0] + ('.' if q.initial_period else '')
-            text = template.format_map(values)
-            size = char_length(text)
-            if size < q.min_length or (q.max_length is not None and size > q.max_length):
-                continue
-            details = {}
-            for c,(record,rendered) in selected.items():
-                details[c] = {
-                    'text': rendered, 'source_text': record['name'], 'role': record['role'],
-                    'source': record['source'], 'national_count': record['total'] or None,
-                    'group_counts': record['groups'], 'origins': record['origins'],
-                }
-                if q.birth_year_range and record['role'] == 'given':
-                    details[c]['cohort_birth_count'] = self._annual(tuple(q.birth_year_range))[record['name']]
-            return {
-                'text': text, 'length': size,
-                'given_names': [selected[c][1] for c in ('given','middle') if c in selected],
-                'surnames': [selected[c][1] for c in ('surname','surname2') if c in selected],
-                'components': details, 'group': group,
-                'birth_year_range': list(q.birth_year_range) if q.birth_year_range else None,
-                'use_frequency_weights': q.use_frequency_weights,
-                'generator_version': VERSION, 'dataset_version': self.dataset_version,
-            }
-        raise SamplingExhausted(f'No result after {q.max_attempts} attempts; widen length bounds or raise max_attempts. This does not prove no match exists.')
+            group,gender,pools,_=self.random.choices(options,weights=[x[3] for x in options],k=1)[0]
+            values={};selected={}
+            for component in components:
+                rows,cumulative=pools[component]
+                row,rendered=rows[bisect.bisect_right(cumulative,self.random.random()*cumulative[-1])]
+                selected[component]=(row,rendered)
+                values[component]=rendered
+                values[component+'_initial']=regex.findall(r'\X',rendered)[0]+('.' if q.initial_period else '')
+            text=template.format_map(values);size=char_length(text)
+            if size<q.min_length or (q.max_length is not None and size>q.max_length):continue
+            details={}
+            for component,(row,rendered) in selected.items():
+                if row['id'] not in self._records:
+                    if len(self._records)>=4096:self._records.clear()
+                    self._records[row['id']]=self.dataset.record(row['id'])
+                details[component]={**self._records[row['id']],'text':rendered,'selected_gender_share':row['gender_share']}
+                if row['cohort_count'] is not None:details[component]['cohort_birth_count']=row['cohort_count']
+            return {'text':text,'length':size,'given_names':[selected[c][1] for c in ('given','middle') if c in selected],
+                'surnames':[selected[c][1] for c in ('surname','surname2') if c in selected],
+                'components':details,'group':group,'compound_exception':bool(q.given_pair and tuple(x.upper() for x in q.given_pair) in COMPOUND_EXCEPTIONS),'gender':{'M':'male','F':'female'}.get(gender,'unrestricted'),
+                'birth_year_range':list(q.birth_year_range) if q.birth_year_range else None,
+                'use_frequency_weights':q.use_frequency_weights,'generator_version':VERSION,'dataset_version':self.dataset_version}
+        raise SamplingExhausted(f'No result within {q.max_attempts} attempts; this does not prove no match exists')

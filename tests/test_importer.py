@@ -4,10 +4,10 @@ import zipfile
 from pathlib import Path
 import openpyxl
 from us_names import Dataset
-from us_names.build import import_census, import_ssa
+from us_names.build import import_census, import_ssa, import_census_sex
 
 class ImportTests(unittest.TestCase):
-    def test_official_columns_preserved_and_ssa_sexes_summed(self):
+    def test_official_columns_preserved_and_ssa_sexes_retained(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)
             w=openpyxl.Workbook()
@@ -24,10 +24,11 @@ class ImportTests(unittest.TestCase):
                 self.assertEqual(import_census(db,p/'names.xlsx','given'),1)
                 summary=import_ssa(db,p/'names.zip')
                 self.assertEqual(summary['year_range'],[2000,2000])
-                row=db.connection.execute('SELECT count FROM annual WHERE name=?',('JOSE',)).fetchone()
+                row=db.connection.execute('SELECT SUM(a.count) FROM name_year_sex_counts a JOIN names n ON n.id=a.name_id WHERE n.name=?',('JOSE',)).fetchone()
                 self.assertEqual(row[0],15)
-                row=db.connection.execute('SELECT total,source FROM names WHERE name=?',('RARE',)).fetchone()
-                self.assertEqual(row[0],0)
+                self.assertEqual(db.connection.execute("SELECT COUNT(*) FROM name_year_sex_counts a JOIN names n ON n.id=a.name_id WHERE n.name='JOSE'").fetchone()[0],2)
+                row=db.connection.execute('SELECT total,source_id FROM names WHERE name=?',('RARE',)).fetchone()
+                self.assertIsNone(row[0])
                 self.assertEqual(row[1],'ssa_national')
 
 if __name__=='__main__':unittest.main()

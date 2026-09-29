@@ -19,6 +19,8 @@ def main(argv=None):
     g.add_argument('--min-length',type=int,default=1)
     g.add_argument('--max-length',type=int)
     g.add_argument('--group',choices=['auto','none',*GROUPS],default='auto')
+    g.add_argument('--gender',choices=['auto','female','male','unrestricted'],default='auto')
+    g.add_argument('--min-gender-share',type=float,default=0.05)
     g.add_argument('--uniform',action='store_true')
     g.add_argument('--birth-years',nargs=2,type=int,metavar=('FROM','TO'))
     g.add_argument('--casing',choices=['source','upper','lower','title'],default='source')
@@ -41,16 +43,12 @@ def main(argv=None):
             if a.command=='export':
                 opener=gzip.open if a.output.suffix=='.gz' else open
                 with opener(a.output,'xt',encoding='utf-8') as f:
-                    for row in db.connection.execute('SELECT * FROM names ORDER BY role,name'):
-                        r=dict(row)
-                        r['group_counts']=json.loads(r.pop('groups_json'))
-                        r['origins']=json.loads(r.pop('origins_json'))
-                        r['national_count']=r.pop('total') or None
-                        f.write(json.dumps(r,ensure_ascii=False)+'\n')
+                    for row in db.connection.execute('SELECT id FROM names ORDER BY role,name'):
+                        f.write(json.dumps(db.record(row[0]),ensure_ascii=False)+'\n')
                 return
             if a.count < 1:
                 p.error('--count must be positive')
-            config=dict(format=a.format,min_length=a.min_length,max_length=a.max_length,
+            config=dict(gender=a.gender,min_gender_share=a.min_gender_share,format=a.format,min_length=a.min_length,max_length=a.max_length,
                 group=None if a.group=='none' else a.group,use_frequency_weights=not a.uniform,
                 birth_year_range=tuple(a.birth_years) if a.birth_years else None,
                 casing=a.casing,ascii_only=a.ascii,initial_period=not a.no_initial_period)

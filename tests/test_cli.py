@@ -13,6 +13,7 @@ class CLITests(unittest.TestCase):
             db=Path(d)/'names.sqlite'
             with Dataset.create(db) as store:
                 store.add_name('JOSE','given',10,{'hispanic':10},'fixture')
+                store.add_sex('JOSE','M',10,'fixture')
                 store.add_name('RUIZ','surname',10,{'hispanic':10},'fixture')
                 store.commit()
             out=io.StringIO()

@@ -49,39 +49,65 @@ def import_census(db, path, role):
                 continue
             # No fictional estimates: retain six published, noise-adjusted counts.
             groups={g:float(row[i]) for g,i in zip(GROUPS,indices)}
-            db.add_name(name,role,float(row[total_index]),groups,'census_2020')
+            db.add_name(name,role,float(row[total_index]),groups,'census_given' if role=='given' else 'census_surname')
             count+=1
     finally:
         workbook.close()
     return count
 
 
+def import_census_sex(db, path):
+    workbook=openpyxl.load_workbook(path,read_only=True,data_only=True)
+    ids=dict(db.connection.execute("SELECT name,id FROM names WHERE role='given'"))
+    db.add_source('census_sex')
+    count=0
+    try:
+        rows=iter(workbook.active.values)
+        header=None
+        for row in rows:
+            if row and row[0]=='FIRST NAME':header=list(row);break
+        if header is None or not {'MALE','FEMALE'}.issubset(header):raise ValueError('Unexpected Census sex schema')
+        mi,fi=header.index('MALE'),header.index('FEMALE')
+        for row in rows:
+            if not row[0] or row[0]=='ALL OTHER NAMES' or not isinstance(row[mi],(int,float)):continue
+            name=str(row[0]).strip()
+            if name not in ids:ids[name]=db.add_name(name,'given',None,{},'census_sex')
+            male,female=float(row[mi]),float(row[fi]);total=male+female
+            db.connection.executemany('INSERT INTO name_sex_counts VALUES (?,?,?,?,?)',
+                [(ids[name],sex,n,n/total if total else 0,'census_sex') for sex,n in [('M',male),('F',female)]])
+            count+=1
+    finally:workbook.close()
+    return count
+
+
 def import_ssa(db, path):
-    """Sum published sex-specific birth counts; no claim of current population."""
-    years=[]
-    records=0
+    """Retain the recorded sex in every annual observation; never sum it away."""
+    years=[];records=0
+    ids=dict(db.connection.execute("SELECT name,id FROM names WHERE role='given'"))
+    db.add_source('ssa_national')
     with zipfile.ZipFile(path) as z:
         for filename in sorted(z.namelist()):
             match=re.fullmatch(r'yob(\d{4})\.txt',filename)
-            if not match:
-                continue
-            year=int(match[1])
-            years.append(year)
-            batch=[]
+            if not match:continue
+            year=int(match[1]);years.append(year);batch=[]
             with z.open(filename) as f:
                 for name,sex,count in csv.reader(io.TextIOWrapper(f,encoding='utf-8-sig')):
-                    n=int(count)
-                    if n < 0:
-                        raise ValueError('Negative SSA count')
-                    batch.append((name.upper(),year,n))
-            db.connection.executemany('INSERT INTO annual VALUES (?,?,?) ON CONFLICT(name,year) DO UPDATE SET count=count+excluded.count',batch)
+                    n=int(count);name=name.upper()
+                    if n<0 or sex not in ('M','F'):raise ValueError('Invalid SSA count or sex')
+                    if name not in ids:ids[name]=db.add_name(name,'given',None,{},'ssa_national')
+                    batch.append((ids[name],year,sex,n,'ssa_national'))
+            db.connection.executemany('INSERT INTO name_year_sex_counts VALUES (?,?,?,?,?)',batch)
             records+=len(batch)
-        if not years:
-            raise ValueError('SSA ZIP contains no annual files')
-    # Zero means no Census count available, not zero actual prevalence.
-    db.connection.execute("INSERT OR IGNORE INTO names(name,role,total,groups_json,source) SELECT DISTINCT name,'given',0,'{}','ssa_national' FROM annual")
+        if not years:raise ValueError('SSA ZIP contains no annual files')
+    # Only names without ANY Census sex record receive SSA all-years fallback.
+    db.connection.execute("""INSERT INTO name_sex_counts(name_id,sex,count,share,source_id)
+        SELECT a.name_id,a.sex,SUM(a.count),0,'ssa_national' FROM name_year_sex_counts a
+        WHERE NOT EXISTS(SELECT 1 FROM name_sex_counts s WHERE s.name_id=a.name_id)
+        GROUP BY a.name_id,a.sex""")
+    db.connection.execute("""UPDATE name_sex_counts AS s SET share=count/(SELECT SUM(t.count) FROM name_sex_counts t WHERE t.name_id=s.name_id)
+        WHERE source_id='ssa_national'""")
     return {'year_range':[min(years),max(years)],'raw_name_sex_year_rows':records,
-            'name_year_rows':db.connection.execute('SELECT COUNT(*) FROM annual').fetchone()[0]}
+        'name_year_sex_rows':db.connection.execute('SELECT COUNT(*) FROM name_year_sex_counts').fetchone()[0]}
 
 
 def build(raw_dir, output):
@@ -97,12 +123,16 @@ def build(raw_dir, output):
     try:
         with Dataset.create(temp) as db:
             stats={}
+            for key,value in manifest.items():db.add_source(key,value)
             for key,role in [('census_given','given'),('census_surname','surname')]:
                 stats[key]=import_census(db,raw_dir/manifest[key]['file'],role)
                 print(f'Imported {stats[key]:,} {role} Census names',flush=True)
+            stats['census_sex']=import_census_sex(db,raw_dir/manifest['census_sex']['file'])
             stats['ssa']=import_ssa(db,raw_dir/manifest['ssa_national']['file'])
             stats['total_tokens']=db.connection.execute('SELECT COUNT(*) FROM names').fetchone()[0]
             fingerprint=hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest()[:12]
+            db.set_metadata('schema_version',2)
+            db.set_metadata('gender_measure','Source-recorded sex counts; Census overall preferred, SSA cohort or fallback. Not individual gender identity.')
             db.set_metadata('dataset_version',f'{VERSION}-{fingerprint}')
             db.set_metadata('built_at_utc',datetime.now(timezone.utc).isoformat())
             db.set_metadata('sources',manifest)

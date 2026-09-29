@@ -20,6 +20,7 @@ class GeneratorTests(unittest.TestCase):
             ('SMITH', 'surname', 1000, {'white': 1000}),
         ]:
             self.db.add_name(name, role, count, groups, 'fixture')
+            if role == 'given': self.db.add_sex(name, 'M', count, 'fixture')
         self.db.add_annual('JOSE', 1980, 10)
         self.db.add_annual('PEDRO', 2000, 10)
         self.db.commit()

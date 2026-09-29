@@ -3,16 +3,21 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "us-synthetic-names"
+name = "us-names-source"
 version = "0.2.0"
-description = "Source-tracked US synthetic names with frequency, cohort and length controls"
-requires-python = ">=3.10"
+description = "Build and release the US names SQLite dataset from government sources"
+readme = "README.md"
+requires-python = ">=3.11"
 dependencies = ["openpyxl>=3.1,<4", "regex>=2024.0"]
 
+[project.urls]
+Repository = "https://github.com/lambdawalker/ds.source.usnames"
+Consumer = "https://github.com/lambdawalker/ds.python.usnames"
+
 [project.scripts]
-us-names-download = "us_names.download:main"
-us-names = "us_names.cli:main"
-us-names-build = "us_names.build:main"
+us-names-source-download = "us_names_source.download:main"
+us-names-build = "us_names_source.build:main"
+us-names-export = "us_names_source.export:main"
 
 [tool.setuptools.packages.find]
-include = ["us_names*"]
+include = ["us_names_source*"]

@@ -10,7 +10,9 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import openpyxl
-from .core import Dataset, GROUPS, VERSION
+from .database import Dataset
+from . import VERSION
+GROUPS = ('white', 'black', 'aian', 'asian_nhpi', 'multiracial', 'hispanic')
 
 from .download import SOURCES, source_manifest
 

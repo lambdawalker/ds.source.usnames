@@ -14,3 +14,6 @@ data/
 *.zip
 *.xlsx
 *.part
+
+build/
+dist/

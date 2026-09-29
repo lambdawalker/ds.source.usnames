@@ -1,81 +1,54 @@
-# US synthetic names — v0.2.0
+# US names dataset — source and release pipeline
 
-Python name generator for synthetic ID-card tests, backed by government aggregate data. Supports frequency weighting, length constraints, initials, multiple given names and surnames, optional birth-year ranges, and a shared gender category for given names.
+This repository downloads government name aggregates, builds the normalized SQLite database, validates it, and publishes versioned GitHub Releases. **Random-name generation lives in [ds.python.usnames](https://github.com/lambdawalker/ds.python.usnames).** No generator package is installed by this project.
 
-**Results are plausible approximations.** Broad Census groups are not detailed naming traditions or linguistic origins. Unknown origins stay unknown. Source-recorded sex is used for synthetic generation, not to infer a real person's gender identity.
+Download the [published datasets](https://github.com/lambdawalker/ds.source.usnames/releases), or rebuild them with the commands below. Large source files and generated databases are excluded from Git.
 
-## Build from original sources
+## Build from originals
 
-Python 3.10+. Run from this directory:
-
-```sh
-uv run python -m pip install -e .
-uv run python -m us_names.download
-uv run python -m us_names.build
-uv run python -m us_names generate --format full --count 20 --seed 42
-```
-
-The downloader retrieves three Census workbooks (given-name groups, surname groups, given-name sex) and the SSA national ZIP. It records SHA-256 hashes in `data/raw/sources.manifest.json`. Repeating it verifies and reuses cached files. `--refresh` fetches current source releases. Use a different `--raw-dir` to preserve an older snapshot.
-
-The builder is entirely offline: it checks input hashes, validates workbook headers, normalizes the counts, creates SQLite indexes, and writes `data/names.manifest.json`. It refuses to overwrite an existing database. A failed build removes its temporary database. Schema 1 databases must be rebuilt; they are not silently interpreted as schema 2.
-
-The source-only Git branch excludes downloaded files and generated datasets. This prepared release bundle includes `names.sqlite.gz`, `tokens.jsonl.gz`, source code, a manifest, validation report, and `SHA256SUMS`. To use the prepared SQLite file:
+Python 3.11+ (release CI uses 3.12). From this checkout:
 
 ```sh
-python -m gzip -d names.sqlite.gz
-python -m us_names generate --db names.sqlite --format full --count 20
+python -m pip install -e .
+mkdir -p data/raw
+cp scripts/sources.manifest.json data/raw/sources.manifest.json
+python -m us_names_source.download
+python -m us_names_source.build
+mkdir -p dist
+python -m us_names_source.export --output dist/tokens.jsonl.gz
+python scripts/package_release.py
+(cd dist && sha256sum --check SHA256SUMS)
 ```
 
-The Python wheel does not embed the database; supply its path when running elsewhere.
+Windows users can create directories and copy the manifest with their shell equivalents. `uv sync` / `uv run` are also supported by the committed lockfile.
 
-## Python API
+The downloader retrieves three Census workbooks and the SSA national ZIP, records their SHA-256 hashes, and reuses verified cached files. The existing browser-header fix for SSA downloads is preserved. Pinning the manifest before download requires the exact committed source snapshot. Rolling government URLs may change; a hash mismatch fails rather than accepting new data silently.
 
-```python
-from us_names import Dataset, Generator, Query
+The builder is offline. It checks input hashes and workbook headers, imports normalized counts, creates indexes, and writes `data/names.sqlite` with `data/names.manifest.json`. Existing output databases are never overwritten. A failed import removes its temporary database.
 
-with Dataset('data/names.sqlite') as dataset:
-    generator = Generator(dataset, seed=42)
-    query = Query(
-        format='double_surname',
-        group='hispanic',
-        gender='female',
-        birth_year_range=(1980, 1989),
-        min_length=11,
-        max_length=30,
-        use_frequency_weights=True,
-    )
-    result = generator.generate(query)
-    print(result['text'])
-    print(result['given_names'], result['surnames'])
-    print(result['gender'])
-```
-
-Results include the original components, final character length, selected group/gender, published counts, selected gender share, cohort counts when requested, sources, and dataset/generator versions. Origin lists are empty when unknown. The CLI adds seed and result index in JSONL mode. Reproducibility requires the same source snapshot, software/dependency versions, query, seed, and call order. Create a connection/generator per worker; instantiate after edits to the dataset.
-
-## Gender behavior
-
-- `gender='auto'` (default) selects one male or female category for the entire generated name.
-- `gender='female'` or `'male'` explicitly selects that category.
-- `gender='unrestricted'` disables the filter and permits mixed given names.
-- Surnames are not filtered by sex; surname-only queries have no selected gender.
-- `min_gender_share=0.05` requires at least 5% of a token's recorded uses to belong to the selected category. This is a configurable compatibility heuristic, not a claim of certainty.
-- Frequency-weighted sampling favors counts for the chosen category. Uniform sampling still enforces the category and threshold.
-- Names without usable sex evidence are excluded from gender-constrained generation. Missing values are not assigned guessed genders.
-
-Without a birth-year filter, Census sex counts are preferred. Where a name has no Census sex record, an explicitly source-labeled SSA all-years aggregate supplies the association. With a year filter, eligibility and frequency use SSA sex counts for that cohort, not overall Census associations.
-
-**Ordered compound exceptions:** `Query(format='full', given_pair=('JOSE','MARIA'))` explicitly requests the curated male compound; `('MARIA','JOSE')` requests the female compound. These two manually curated exceptions bypass individual gender thresholds only for the requested pair and mark `compound_exception=true` in the result. They still obey group, year, length and formatting constraints. No probability or population frequency is invented for these pairs; they are never automatically injected into random sampling. Other explicitly requested pairs must pass ordinary shared-gender rules. This is a narrow formatting rule, not an exhaustive compound-name dataset.
-
-CLI examples:
+To update the source snapshot intentionally, download to a new directory with `--refresh`, review the new data and manifest, then update `scripts/sources.manifest.json` before the next release. Increment the dataset version in `us_names_source/__init__.py` and the package version when appropriate. Preserve the old manifest/release for reproducibility.
 
 ```sh
-python -m us_names generate --format full --gender female --count 10
-python -m us_names generate --format full --gender male --birth-years 1980 1989 --count 10
-python -m us_names generate --format full --uniform --count 10
-python -m us_names generate --gender unrestricted --group none --format full --count 10
-python -m us_names generate --format '{surname}, {given_initial} {middle_initial}' --count 10
-python -m us_names generate --jsonl --count 100 --output generated.jsonl
+python -m us_names_source.download --raw-dir data/new-raw --refresh
+python -m us_names_source.build --raw-dir data/new-raw --output data/new.sqlite
 ```
+
+## Publish a release
+
+On the `main` branch, open **Actions → Release names dataset → Run workflow** and supply a new tag such as `dataset-v0.2.1`. The workflow tests the producer, downloads pinned originals, builds and exports the dataset, validates integrity and foreign keys, verifies checksums, and uploads the assets before publishing. Existing release tags are rejected. Ordinary pushes run tests without creating releases.
+
+If uploading fails after a draft is created, inspect the draft and complete that upload or delete the failed draft/tag before retrying. Published releases must not be replaced in place.
+
+Release assets:
+
+- `names.sqlite.gz`: compressed schema-2 database.
+- `tokens.jsonl.gz`: token records with group and overall sex counts; annual observations remain in SQLite.
+- `names.manifest.json`: source URLs, hashes, versions, build time and statistics.
+- `VALIDATION.json`: SQLite integrity results and table counts.
+- `SHA256SUMS`: asset checksums.
+- `README.md`: build instructions and data limitations.
+
+The generator downloads these assets from this repository's releases. Its version can advance without rebuilding the data. See [the dataset contract](docs/dataset-contract.md).
 
 ## Normalized SQLite schema
 
@@ -91,47 +64,8 @@ python -m us_names generate --jsonl --count 100 --output generated.jsonl
 
 Counts are numeric rows with foreign keys and nonnegative checks. Group counts are no longer stored in a JSON field. `metadata` still uses JSON for descriptive information; JSON is also used for portable exports.
 
-Indexes support role/length, group, sex/share, and year/sex candidate selection. SQLite filters candidate rows before Python loads them; the generator no longer parses every token's group JSON. Source grapheme length can be filtered in SQL. Transform-dependent lengths (ASCII/case conversion) are checked after transformation. Cohort observations are aggregated into an indexed temporary table, reused for that range. Sampling pools and record caches are bounded and instance-local.
-
-`share` in `name_sex_counts` is a derived sampling value: count divided by the sum of both source sex counts for that name. It is not a separately observed statistic. Census group and sex totals can differ due to independent disclosure noise; denominators are not mixed.
-
-## Formats and length rules
-
-| Preset | Template |
-|---|---|
-| `given` | `{given}` |
-| `surname` | `{surname}` |
-| `name` (default) | `{given} {surname}` |
-| `full` | `{given} {middle} {surname}` |
-| `double_surname` | `{given} {middle} {surname} {surname2}` |
-| `middle_initial` | `{given} {middle_initial} {surname}` |
-| `given_initials` | `{given_initial} {middle_initial} {surname}` |
-| `initials` | `{given_initial} {middle_initial} {surname_initial}` |
-| `surname_first` | `{surname}, {given} {middle_initial}` |
-
-Each component supports `_initial`, including `{surname2_initial}`. Custom literals/separators are preserved. Two given components and two surname components are supported. The slot `middle` means a second given component; it does not impose a universal naming tradition. Multiword source components stay intact; their initial is the first visible character. Repeated placeholders use the same sampled component.
-
-Length limits are inclusive. “More than 10 and fewer than 20” means 11–19. Count Unicode extended grapheme clusters, including spaces and punctuation, after casing, ASCII folding and initial formatting. Font width is not modeled. Full components can have separate bounds: `component_lengths={'given': (4,8), 'surname': (5,12)}`. These apply before replacing a component by an initial.
-
-Defaults: `min_length=1`, `max_length=None`, `component_lengths={}`, `use_frequency_weights=True`, `group='auto'`, `min_group_share=0.05`, `gender='auto'`, `min_gender_share=0.05`, `given_pair=None`, `birth_year_range=None`, `casing='source'`, `ascii_only=False`, `initial_period=True`, `max_attempts=10000`.
-
-Use `--query query.json` for all API options; JSON keys override CLI query options. `--group none` disables group compatibility. `--no-initial-period` removes periods. `--casing` accepts source, upper, lower, title. ASCII folding is lossy character removal, not linguistic transliteration; mechanical title casing may be inappropriate for some names.
-
-`NoCandidates` means no eligible token pools. `SamplingExhausted` means rejection sampling found no final-length match within the attempt budget; it does not prove the query impossible. No truncation or silent gender relaxation occurs. Duplicate names/components are possible. Failed CLI batches can leave partial output; existing output files are never overwritten.
-
-## Frequency model and limitations
-
-For a specified Census group, eligibility requires the group's count to represent at least `min_group_share` of that token's national count. Counts are not linguistic-origin probabilities. Census groups are white, black, aian, asian_nhpi, multiracial, hispanic. The first five denote non-Hispanic groups; Asian and Pacific Islander categories are combined and cannot distinguish individual naming traditions.
-
-Without a cohort, weighted given-name sampling uses national count (or selected group count) multiplied by the selected sex share. With a cohort, it uses SSA counts for the selected sex and years, multiplied by the Census group share when enabled. These are approximations combining separate marginal tables; joint group/sex/year counts are not available. Surnames use Census counts.
-
-Auto mode chooses among eligible group/gender combinations using the first component's eligible mass, then samples components within that combination. Uniform mode gives equal probability to eligible tokens within a combination. Overlapping groups and sex associations mean unconditional token probabilities need not be uniform. Use both `group=None` and `gender='unrestricted'` for globally uniform token sampling. Final-length rejection conditions the distribution on the requested constraints.
-
-A name's group composition is not its prevalence within the entire group. We preserve source counts rather than inventing population denominators. This release does not establish full-name joint frequencies, middle-name distributions, paired-surname frequencies, or detailed cultural origins. Gender consistency reduces clearly implausible combinations but does not make every name culturally plausible.
-
-Census counts include disclosure noise; SSA suppresses small cells. `ALL OTHER NAMES` is excluded from tokens and retained only as metadata. SSA covers US births, not all current residents, and cannot account for migration, survival or later name changes. It removes spaces and hyphens; uppercase matching does not restore these or missing accents. Rare or unusual source entries may remain. Some names used by both sexes remain eligible for both categories. Requested year ranges use available published observations only. Names are not guaranteed unique or unlike real names.
-
-## Sources and rebuild
+Indexes cover role/length, group/count, sex/share and year/sex. `share` is count divided by the sum of source sex counts for a name; it is a derived value, not a separately observed statistic.
+## Sources and limitations
 
 1. [Census 2020 name tables](https://www.census.gov/topics/population/genealogy/data/2020_names.html)
 2. [Census first-name methodology](https://www2.census.gov/library/publications/decennial/2020/c2020br-13.pdf)
@@ -139,13 +73,17 @@ Census counts include disclosure noise; SSA suppresses small cells. `ALL OTHER N
 4. [SSA downloads](https://www.ssa.gov/oact/babynames/limits.html)
 5. [SSA qualifications](https://www.ssa.gov/oact/babynames/background.html)
 
-The validated snapshot contains 270,062 text/role records, 53,615 Census first-name group rows, 156,621 Census surname group rows, 53,615 Census first-name sex rows, and 2,181,032 SSA name/year/sex observations across 1880–2025. Source data retains its attribution; no exclusive rights to government data are claimed. Source hashes and build date are included in the manifest. No INE, INSEE or Wikidata dataset has been imported.
+
+Counts are approximate government aggregates. Census groups (white, black, aian, asian_nhpi, multiracial, hispanic) are not linguistic origins; the first five are non-Hispanic groups. Detailed cultural origins remain unknown rather than guessed. Group and sex totals can differ due to separate disclosure noise. No full-name, middle-name, paired-surname, or joint group/sex/year frequencies are observed.
+
+Census's `ALL OTHER NAMES` aggregate is excluded from name tokens and retained in metadata. SSA suppresses small cells and covers births rather than all current residents; it cannot account for migration, survival or later name changes. SSA removes spaces and hyphens; uppercase matching does not restore missing accents. Rare or unusual names may remain. Source-recorded sex is not individual gender identity.
+
+The manifest is authoritative for the exact counts and year range of each release. Source data retains its attribution; no exclusive rights to government data are claimed. No INE, INSEE or Wikidata dataset has been imported.
+
+## Development
 
 ```sh
-python -m us_names.download --refresh
-python -m us_names.build --output data/rebuilt.sqlite
-python -m us_names export --db data/rebuilt.sqlite --output data/tokens.jsonl.gz
 python -m unittest discover -s tests -v
 ```
 
-The export includes all available group and overall sex counts per token; annual observations remain in SQLite. Test fixtures contain deliberately simplified counts and are not demographic estimates. Source-only Git publishing and a GitHub Release upload are separate steps; this prepared bundle has not been uploaded as a Release.
+Tests cover source caching, hash validation, the SSA request headers, offline builds, import columns and preservation of annual sex counts. The package namespace is `us_names_source`, distinct from the consumer's `us_names`; both can be installed in one environment without collisions.

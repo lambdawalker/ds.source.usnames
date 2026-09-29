@@ -1,8 +1,7 @@
-US-wide synthetic-name dataset, built from pinned Census 2020 and SSA national data (1880–2025).
+US-wide names dataset built from pinned Census and SSA government aggregates.
 
-- Normalized, indexed SQLite tables for name frequencies, demographic counts, sex counts, and birth-year counts.
-- Python generator supports consistent given-name sex selection, initials, multiple given names and surnames, length constraints, and weighted or uniform sampling.
-- Download `names.sqlite.gz` and decompress it for use with the Python source at this release tag. `tokens.jsonl.gz` is the portable export.
-- `names.manifest.json` records original URLs and SHA-256 hashes; `SHA256SUMS` verifies the release assets.
+Download `names.sqlite.gz` for SQLite or `tokens.jsonl.gz` for portable token records. See `names.manifest.json` for the exact source snapshot, years, version and counts. Verify downloads against `SHA256SUMS`; database integrity results are in `VALIDATION.json`.
 
-These are approximate synthetic distributions. Census demographic groups do not establish linguistic or cultural origin. Joint name, demographic, sex, and cohort relationships are approximated; source suppression and missing names limit coverage. Source-recorded sex is not an individual's gender identity. See README.md for limitations and defaults.
+The Python generator is maintained separately at https://github.com/lambdawalker/ds.python.usnames and consumes these release assets.
+
+Census demographic groups are not linguistic or cultural origins. Frequencies are approximate: source disclosure noise, suppression, normalization, and missing names affect coverage. Source-recorded sex is not an individual's gender identity. See README.md for source methods and limitations.

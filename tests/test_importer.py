@@ -3,8 +3,8 @@ import unittest
 import zipfile
 from pathlib import Path
 import openpyxl
-from us_names import Dataset
-from us_names.build import import_census, import_ssa, import_census_sex
+from us_names_source.database import Dataset
+from us_names_source.build import import_census, import_ssa, import_census_sex
 
 class ImportTests(unittest.TestCase):
     def test_official_columns_preserved_and_ssa_sexes_retained(self):

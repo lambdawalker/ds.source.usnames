@@ -5,8 +5,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
-from us_names.download import download_sources, source_manifest
-from us_names.build import build
+from us_names_source.download import download_sources, source_manifest
+from us_names_source.build import build
 
 class DownloadTests(unittest.TestCase):
     def test_download_cache_and_hash_validation(self):

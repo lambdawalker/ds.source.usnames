@@ -30,7 +30,8 @@ shutil.copy2(root / 'README.md', out)
 lines = []
 for path in sorted(out.iterdir()):
     if path.is_file() and path.name != 'SHA256SUMS':
-        digest = hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()
+        with path.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
         lines.append(f'{digest}  {path.name}\n')
 (out / 'SHA256SUMS').write_text(''.join(lines))
 print(json.dumps(counts))

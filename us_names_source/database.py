@@ -17,7 +17,7 @@ class Dataset:
         self.connection.execute('PRAGMA foreign_keys=ON')
         if self.connection.execute('PRAGMA user_version').fetchone()[0] != SCHEMA_VERSION:
             self.close()
-            raise ValueError('Dataset schema is incompatible; rebuild with us_names.build (schema 2)')
+            raise ValueError('Dataset schema is incompatible; rebuild with us_names_source.build (schema 2)')
 
     @classmethod
     def create(cls, path):

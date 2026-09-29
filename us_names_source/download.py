@@ -29,7 +29,7 @@ HEADERS = {
 
 def _describe(path, url):
     if not path.is_file():
-        raise FileNotFoundError(f'{path} is missing; run python -m us_names.download first')
+        raise FileNotFoundError(f'{path} is missing; run python -m us_names_source.download first')
     if not zipfile.is_zipfile(path):
         raise ValueError(f'{path} is not a valid ZIP/XLSX file; download it again with --refresh')
     digest = hashlib.sha256()

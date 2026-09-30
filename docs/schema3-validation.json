@@ -1,0 +1,67 @@
+{
+  "schema_version": 3,
+  "dataset_version": "0.3.0-900e3fe359ed",
+  "source_snapshot": {
+    "census_sex": {
+      "url": "https://www2.census.gov/topics/genealogy/2020surnames/Names2020_FirstNames_Sex.xlsx",
+      "file": "Names2020_FirstNames_Sex.xlsx",
+      "sha256": "b763374b9b0ea4a9496f8563721312e8572e5a45136d34244db9ffba666c3326",
+      "bytes": 3018453
+    },
+    "census_given": {
+      "url": "https://www2.census.gov/topics/genealogy/2020surnames/Names2020_FirstNames_RaceHispanic.xlsx",
+      "file": "Names2020_FirstNames_RaceHispanic.xlsx",
+      "sha256": "881e092953c2eac345c4d4adea8df14fab2c892c1046231e2d9be3cd23850033",
+      "bytes": 4096264
+    },
+    "census_surname": {
+      "url": "https://www2.census.gov/topics/genealogy/2020surnames/Names2020_LastNames_RaceHispanic.xlsx",
+      "file": "Names2020_LastNames_RaceHispanic.xlsx",
+      "sha256": "2e773c7edd934bb340b09be46e5d991b74a65cd63f547c94f80b6e233db462b3",
+      "bytes": 11359767
+    },
+    "ssa_national": {
+      "url": "https://www.ssa.gov/oact/babynames/names.zip",
+      "file": "names.zip",
+      "sha256": "cd78e975ed7bb358e018dd62fbe14ced89295e9581c49172ca4eedcb011b3724",
+      "bytes": 7860026
+    }
+  },
+  "old_sqlite_bytes": 206405632,
+  "new_sqlite_bytes": 73498624,
+  "gzip_bytes": 15002964,
+  "all_original_name_role_ids_retained": true,
+  "integrity_check": "ok",
+  "foreign_key_violations": 0,
+  "normalized_periods": 49,
+  "unit_tests_passed": 8,
+  "statistics": {
+    "census_given": 53615,
+    "census_surname": 156621,
+    "census_sex": 53615,
+    "ssa": {
+      "year_range": [
+        1880,
+        2025
+      ],
+      "raw_name_sex_year_rows": 2181032,
+      "name_year_sex_rows": 2181032
+    },
+    "total_tokens": 270062,
+    "retained_names": 270062,
+    "given_names": 113441,
+    "dropped_names": 0,
+    "periods": 49,
+    "year_range": [
+      1880,
+      2025
+    ],
+    "period_evidence_counts": {
+      "observed": 883854,
+      "interpolated": 205865,
+      "extrapolated": 4102615,
+      "fallback": 366275
+    },
+    "max_frequency_quantization_error": 4.562833291671398e-06
+  }
+}

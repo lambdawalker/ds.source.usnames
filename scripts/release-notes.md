@@ -1,7 +1,12 @@
-US-wide names dataset built from pinned Census and SSA government aggregates.
+Compact schema-3 US names model for fictional-name generation.
 
-Download `names.sqlite.gz` for SQLite or `tokens.jsonl.gz` for portable token records. See `names.manifest.json` for the exact source snapshot, years, version and counts. Verify downloads against `SHA256SUMS`; database integrity results are in `VALIDATION.json`.
+- All source name/role records retained; no rarity filtering.
+- Three-year name-frequency and female-share buckets, with linear interpolation, constant endpoint extrapolation and marked fallbacks.
+- Compact scaled integers; normalized SQL view and decoded JSONL export.
+- Source hashes, model assumptions, estimation totals and validation included.
 
-The Python generator is maintained separately at https://github.com/lambdawalker/ds.python.usnames and consumes these release assets.
+**This data is approximate and not fully representative of reality.** It is intended for fictional names, not demographic inference. Demographic counts remain unchanged in this revision.
 
-Census demographic groups are not linguistic or cultural origins. Frequencies are approximate: source disclosure noise, suppression, normalization, and missing names affect coverage. Source-recorded sex is not an individual's gender identity. See README.md for source methods and limitations.
+**Breaking schema change:** the currently released generator in https://github.com/lambdawalker/ds.python.usnames reads schema 2 and must be updated separately before using this database. Its pinned `dataset-v0.2.0` remains available.
+
+Verify release assets with `SHA256SUMS`. See README.md and the manifest for scales, provenance, source years and limitations.

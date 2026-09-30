@@ -1,12 +1,14 @@
-# US names dataset — source and release pipeline
+# US names dataset — compact fictional-name model
 
-This repository downloads government name aggregates, builds the normalized SQLite database, validates it, and publishes versioned GitHub Releases. **Random-name generation lives in [ds.python.usnames](https://github.com/lambdawalker/ds.python.usnames).** No generator package is installed by this project.
+This repository downloads government name aggregates, builds a compact SQLite model, and publishes it through GitHub Releases. **The output is for generating fictional names. It includes interpolation, extrapolation and fallback estimates, and is not fully representative of reality.** It must not be interpreted as a demographic research dataset.
 
-Download the [published datasets](https://github.com/lambdawalker/ds.source.usnames/releases), or rebuild them with the commands below. Large source files and generated databases are excluded from Git.
+Schema **3** keeps every source name/role record, uses three-year periods, and stores normalized name frequencies and female shares as scaled integers in a wide `names` table. Demographic counts are preserved unchanged for now. Generation code lives in [ds.python.usnames](https://github.com/lambdawalker/ds.python.usnames).
 
-## Build from originals
+**Compatibility:** the currently released Python generator consumes schema 2 and remains pinned to `dataset-v0.2.0`. It needs a separate schema-3 reader/sampler update before using this new database. This source-repository change does not replace existing release assets or silently upgrade library users.
 
-Python 3.11+ (release CI uses 3.12). From this checkout:
+## Build
+
+Python 3.11+; release CI uses Python 3.12.
 
 ```sh
 python -m pip install -e .
@@ -20,70 +22,68 @@ python scripts/package_release.py
 (cd dist && sha256sum --check SHA256SUMS)
 ```
 
-Windows users can create directories and copy the manifest with their shell equivalents. `uv sync` / `uv run` are also supported by the committed lockfile.
+Use shell equivalents for creating directories and copying files on Windows. `uv sync` and `uv run` are also supported. The downloader preserves the SSA browser-header fix and verifies source hashes. The build is offline: a temporary schema-2 database preserves the original observations during import, then is converted into schema 3 and deleted. Allow extra disk space during the build. Generated databases and government files are excluded from Git.
 
-The downloader retrieves three Census workbooks and the SSA national ZIP, records their SHA-256 hashes, and reuses verified cached files. The existing browser-header fix for SSA downloads is preserved. Pinning the manifest before download requires the exact committed source snapshot. Rolling government URLs may change; a hash mismatch fails rather than accepting new data silently.
+An existing output database or manifest is never overwritten. `--raw-dir` and `--output` select alternate paths. To intentionally refresh source inputs, download into a new directory with `--refresh`, review the result, and update `scripts/sources.manifest.json` for the next release.
 
-The builder is offline. It checks input hashes and workbook headers, imports normalized counts, creates indexes, and writes `data/names.sqlite` with `data/names.manifest.json`. Existing output databases are never overwritten. A failed import removes its temporary database.
+## Stored values
 
-To update the source snapshot intentionally, download to a new directory with `--refresh`, review the new data and manifest, then update `scripts/sources.manifest.json` before the next release. Increment the dataset version in `us_names_source/__init__.py` and the package version when appropriate. Preserve the old manifest/release for reproducibility.
+`names` has one row per name/role, keeping given names and surnames distinct. It includes IDs, text, role, character length, source IDs, national count, unchanged Census demographic counts, overall female share, and two numeric columns per period:
 
-```sh
-python -m us_names_source.download --raw-dir data/new-raw --refresh
-python -m us_names_source.build --raw-dir data/new-raw --output data/new.sqlite
+| Column example | Meaning | Stored integer scale |
+|---|---|---:|
+| `frequency_1991_1993` | Name's share of the modeled given-name distribution in this period | 1,000,000,000 |
+| `female_1991_1993` | Female share among occurrences of this name in this period | 10,000 |
+| `female_share` | Overall female share from Census, or SSA fallback | 10,000 |
+
+For example, stored `female_1991_1993 = 7000` means `0.7`, or 70% female. Male share is `1 - female_share`; no second column is needed. Name popularity and female share have different denominators.
+
+The `names_normalized` SQL view exposes all share columns as fractions from 0 to 1 without duplicating stored data:
+
+```sql
+SELECT name, frequency_1991_1993, female_1991_1993
+FROM names_normalized
+WHERE role = 'given' AND female_1991_1993 >= 0.7;
 ```
 
-## Publish a release
+`periods` stores each period's boundaries, original published SSA occurrence total, and the pre-normalization model mass. To combine periods, weight name frequencies by those original totals. `observed_total * frequency` is an approximate modeled occurrence count after estimation, not an original source count.
 
-On the `main` branch, open **Actions → Release names dataset → Run workflow** and supply a new tag such as `dataset-v0.2.1`. The workflow tests the producer, downloads pinned originals, builds and exports the dataset, validates integrity and foreign keys, verifies checksums, and uploads the assets before publishing. Existing release tags are rejected. Ordinary pushes run tests without creating releases.
+Buckets are anchored at 1880: 1880–1882, 1883–1885, etc. The current inputs end in 2025, so the last bucket is **2024–2025**, rather than inventing 2026 observations. There are 49 periods. Exact annual queries are not supported by this compact output; arbitrary partial-period queries require an explicit approximation in the consumer.
 
-If uploading fails after a draft is created, inspect the draft and complete that upload or delete the failed draft/tag before retrying. Published releases must not be replaced in place.
+## Missing periods and precision
 
-Release assets:
+For each given name:
 
-- `names.sqlite.gz`: compressed schema-2 database.
-- `tokens.jsonl.gz`: token records with group and overall sex counts; annual observations remain in SQLite.
-- `names.manifest.json`: source URLs, hashes, versions, build time and statistics.
-- `VALIDATION.json`: SQLite integrity results and table counts.
-- `SHA256SUMS`: asset checksums.
-- `README.md`: build instructions and data limitations.
+1. Aggregate published SSA counts into each period. Compute name frequency against the period's total, and female share against that name's male-plus-female count.
+2. Fill interior gaps by linear interpolation between bucket midpoints.
+3. Extrapolate beyond the first/last observed period by carrying the nearest endpoint value. A name observed in only one period gets constant values elsewhere.
+4. If there are no annual observations, use a constant frequency prior based on available Census counts (overall sex counts, then weight 1, if no national total). Use overall female share, or a neutral 50% when no sex evidence exists. These are explicit modeling assumptions.
+5. Renormalize frequencies across **all retained given names** in each period. Reserve one integer unit per positive name, then use largest-remainder allocation so the stored frequency sum is exactly 1,000,000,000. This keeps rare names sampleable and introduces a small documented quantization bias. Female shares are rounded to 0.01 percentage points.
 
-The generator downloads these assets from this repository's releases. Its version can advance without rebuilding the data. See [the dataset contract](docs/dataset-contract.md).
+`period_evidence` packs two bits per period: observed, interpolated, extrapolated or fallback. Even observed frequencies are renormalized after adding estimated names. Evidence describes the pre-normalization input, not a claim that the final stored value is an untouched observation. The manifest reports evidence totals and maximum frequency quantization error.
 
-## Normalized SQLite schema
+Surnames have no SSA birth-period observations. Their period fields remain NULL (not applicable); surname sampling uses the preserved Census counts. Missing demographic evidence also remains NULL; interpolation applies to the given-name time series, not unrelated static fields.
 
-| Table | Purpose and key |
-|---|---|
-| `names` | Integer ID, text, role, nullable Census total, stored grapheme length, source ID; unique text/role |
-| `name_group_counts` | Published count per name/group; primary key `(name_id, group_id)` |
-| `name_sex_counts` | Preferred overall male/female counts and derived shares per name; primary key `(name_id, sex)` |
-| `name_year_sex_counts` | SSA counts retaining year and recorded sex; primary key `(name_id, year, sex)` |
-| `sources` | Source IDs, URLs, filenames, SHA-256 hashes and sizes |
-| `name_origin_associations` | Sourced origin labels/evidence, currently unpopulated |
-| `metadata` | Version, source manifest, build time and statistics |
+## Accuracy and provenance
 
-Counts are numeric rows with foreign keys and nonnegative checks. Group counts are no longer stored in a JSON field. `metadata` still uses JSON for descriptive information; JSON is also used for portable exports.
+- No names are removed. Rows represent name/role pairs, not people.
+- Extrapolation can assign a modern name to an old period, or an old name to a modern period. This is intentional for fictional generation.
+- SSA suppresses small cells. Within an observed name/period, an unreported sex contributes zero to the published-count ratio; this does not prove there were no real occurrences.
+- SSA measures recorded births, not the living US population. Migration, deaths, later name changes and suppressed observations are not modeled.
+- Census demographic groups are not linguistic or cultural origins. Unknown origins remain unknown. Group counts retain disclosure noise and are not normalized or imputed in this revision.
+- Overall source-recorded sex and birth-period sex associations do not establish anyone's gender identity.
+- `ALL OTHER NAMES` remains an excluded aggregate in source metadata; no individual source tokens are removed.
 
-Indexes cover role/length, group/count, sex/share and year/sex. `share` is count divided by the sum of source sex counts for a name; it is a derived value, not a separately observed statistic.
-## Sources and limitations
+Original source URLs, hashes, source statistics and model settings are in the manifest and SQLite metadata. Fine-grained annual source rows are temporary build inputs, not part of the distributed model. See [the schema-3 contract](docs/dataset-contract.md).
 
-1. [Census 2020 name tables](https://www.census.gov/topics/population/genealogy/data/2020_names.html)
-2. [Census first-name methodology](https://www2.census.gov/library/publications/decennial/2020/c2020br-13.pdf)
-3. [Census surname methodology](https://www2.census.gov/library/publications/decennial/2020/c2020br-14.pdf)
-4. [SSA downloads](https://www.ssa.gov/oact/babynames/limits.html)
-5. [SSA qualifications](https://www.ssa.gov/oact/babynames/background.html)
+Sources: [Census 2020 names](https://www.census.gov/topics/population/genealogy/data/2020_names.html), [SSA downloads](https://www.ssa.gov/oact/babynames/limits.html), and [SSA qualifications](https://www.ssa.gov/oact/babynames/background.html).
 
+## Release and test
 
-Counts are approximate government aggregates. Census groups (white, black, aian, asian_nhpi, multiracial, hispanic) are not linguistic origins; the first five are non-Hispanic groups. Detailed cultural origins remain unknown rather than guessed. Group and sex totals can differ due to separate disclosure noise. No full-name, middle-name, paired-surname, or joint group/sex/year frequencies are observed.
-
-Census's `ALL OTHER NAMES` aggregate is excluded from name tokens and retained in metadata. SSA suppresses small cells and covers births rather than all current residents; it cannot account for migration, survival or later name changes. SSA removes spaces and hyphens; uppercase matching does not restore missing accents. Rare or unusual names may remain. Source-recorded sex is not individual gender identity.
-
-The manifest is authoritative for the exact counts and year range of each release. Source data retains its attribution; no exclusive rights to government data are claimed. No INE, INSEE or Wikidata dataset has been imported.
-
-## Development
+Run **Actions → Release names dataset → Run workflow**, supplying a new tag such as `dataset-v0.3.0`. Existing tags are rejected. The workflow builds, exports, checks SQLite integrity, foreign keys, retained-name count and per-period normalization, and publishes compressed data with its manifest, README, validation report and SHA-256 checksums. No database is committed to Git.
 
 ```sh
 python -m unittest discover -s tests -v
 ```
 
-Tests cover source caching, hash validation, the SSA request headers, offline builds, import columns and preservation of annual sex counts. The package namespace is `us_names_source`, distinct from the consumer's `us_names`; both can be installed in one environment without collisions.
+Tests cover source import/download behavior, interpolation, extrapolation, fallback evidence, quantization, name retention, normalized SQL values, export and overwrite protection.
